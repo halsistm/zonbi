@@ -2,7 +2,9 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>ZOMBIE SNIPER</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -191,6 +193,76 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   letter-spacing: 4px; z-index: 60;
   display: none; pointer-events: none;
 }
+
+/* ── TOUCH CONTROLS ── */
+#touch-controls {
+  position: fixed; bottom: 0; right: 0;
+  display: none;
+  z-index: 30; padding: 0 16px 24px 0;
+  gap: 16px; flex-direction: column; align-items: flex-end;
+  pointer-events: none;
+}
+.touch-btn {
+  pointer-events: all;
+  width: 76px; height: 76px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.25);
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 28px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: background 0.1s, transform 0.08s;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+.touch-btn:active { background: rgba(255,255,255,0.18); transform: scale(0.93); }
+#fire-btn {
+  width: 90px; height: 90px;
+  background: rgba(180,20,20,0.7);
+  border-color: rgba(255,80,80,0.45);
+  font-size: 34px;
+  box-shadow: 0 0 18px rgba(200,30,30,0.5), 0 4px 20px rgba(0,0,0,0.6);
+}
+#fire-btn.active { background: rgba(255,50,50,0.85); }
+#scope-btn.scoped {
+  background: rgba(0,180,80,0.65);
+  border-color: rgba(0,255,100,0.45);
+  box-shadow: 0 0 14px rgba(0,200,80,0.5), 0 4px 20px rgba(0,0,0,0.6);
+}
+#touch-pause-btn {
+  position: fixed; top: 14px; right: 14px;
+  display: none;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2);
+  color: #fff; font-size: 16px; z-index: 31;
+  align-items: center; justify-content: center;
+  pointer-events: all; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(4px);
+  text-align: center; line-height: 44px;
+}
+
+/* Mobile HUD adjustments */
+@media (max-width: 812px) {
+  #score-panel { top: 10px; right: 70px; }
+  #score-val { font-size: 26px; }
+  #timer-val { font-size: 12px; }
+  #miss-panel { bottom: 28px; left: 14px; }
+  #hit-text { font-size: 17px; }
+  #combo-text { font-size: 15px; }
+  .screen-title { font-size: 36px; letter-spacing: 4px; }
+  .screen-sub { font-size: 13px; }
+  .btn { font-size: 16px; padding: 12px 32px; }
+  .stat-row { gap: 30px; }
+  .stat-val { font-size: 28px; }
+  .instructions { font-size: 12px; line-height: 2.0; }
+}
+
+/* Prevent iOS rubber-band scroll */
+html, body { overscroll-behavior: none; touch-action: none; }
 </style>
 </head>
 <body>
@@ -219,7 +291,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   </div>
 
   <div id="minimap-wrap">
-    <canvas id="minimap" width="110" height="110"></canvas>
+    <canvas id="minimap" width="110" height="110" style="display:block;border-radius:50%;border:2px solid rgba(0,255,100,0.35);box-shadow:0 0 10px rgba(0,0,0,0.8);"></canvas>
   </div>
 
   <div id="hit-text"></div>
@@ -242,6 +314,13 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 <div id="flash"></div>
 <div id="danger-ring"></div>
 
+<!-- Touch Controls (shown on mobile) -->
+<div id="touch-controls">
+  <button class="touch-btn" id="scope-btn">◉</button>
+  <button class="touch-btn" id="fire-btn">🔫</button>
+</div>
+<div id="touch-pause-btn">⏸</div>
+
 <!-- Pause -->
 <div id="pause-overlay">⏸ PAUSED</div>
 
@@ -249,10 +328,17 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 <div class="screen" id="title-screen">
   <div class="screen-title">☠ ZOMBIE SNIPER</div>
   <div class="screen-sub">ゾンビスナイパー</div>
-  <div class="instructions">
+  <div class="instructions" id="pc-instructions">
     <span>マウス移動</span> → 照準 &nbsp;|&nbsp;
     <span>左クリック</span> → 射撃<br>
     <span>右クリック / Z</span> → スコープON/OFF<br>
+    <span>ヘッドショット +200pt</span> &nbsp;|&nbsp; <span>胴体 +100pt</span><br>
+    ゾンビを5体見逃すとゲームオーバー
+  </div>
+  <div class="instructions" id="touch-instructions" style="display:none">
+    <span>スワイプ</span> → 照準 &nbsp;|&nbsp;
+    <span>🔫 ボタン</span> → 射撃<br>
+    <span>◉ ボタン</span> → スコープON/OFF<br>
     <span>ヘッドショット +200pt</span> &nbsp;|&nbsp; <span>胴体 +100pt</span><br>
     ゾンビを5体見逃すとゲームオーバー
   </div>
@@ -744,17 +830,39 @@ function getDifficulty(t) {
 }
 
 // ════════════════════════════════════════════
+// DEVICE DETECTION
+// ════════════════════════════════════════════
+const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+// Resize minimap for mobile
+if (isTouchDevice) {
+  const mm = document.getElementById('minimap');
+  mm.width = 88; mm.height = 88;
+  mm.style.width = '88px'; mm.style.height = '88px';
+}
+
+function setupMobileUI() {
+  if (!isTouchDevice) return;
+  document.getElementById('touch-controls').style.display = 'flex';
+  document.getElementById('touch-pause-btn').style.display = 'flex';
+  document.getElementById('pc-instructions').style.display = 'none';
+  document.getElementById('touch-instructions').style.display = 'block';
+}
+setupMobileUI();
+
+// ════════════════════════════════════════════
 // INPUT
 // ════════════════════════════════════════════
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
-  if (!pointerLocked && gameState === 'playing') {
+  if (!pointerLocked && gameState === 'playing' && !isTouchDevice) {
     gameState = 'paused';
     document.getElementById('pause-overlay').style.display = 'block';
   }
 });
 
 document.addEventListener('mousemove', e => {
+  if (isTouchDevice) return;
   if (!pointerLocked || gameState !== 'playing') return;
   const sens = isScoped ? 0.00075 : 0.0018;
   yaw   -= e.movementX * sens;
@@ -764,6 +872,7 @@ document.addEventListener('mousemove', e => {
 });
 
 document.addEventListener('mousedown', e => {
+  if (isTouchDevice) return;
   if (gameState === 'paused') {
     gameState = 'playing';
     document.getElementById('pause-overlay').style.display = 'none';
@@ -790,6 +899,73 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// ── TOUCH INPUT ──
+let lastTouchX = 0, lastTouchY = 0;
+let lookTouchId = null;
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (gameState === 'title') { startGame(); return; }
+  if (gameState === 'paused') {
+    gameState = 'playing';
+    document.getElementById('pause-overlay').style.display = 'none';
+    return;
+  }
+  if (gameState !== 'playing') return;
+  // Track first touch on canvas as look touch
+  for (const t of e.changedTouches) {
+    if (lookTouchId === null) {
+      lookTouchId = t.identifier;
+      lastTouchX = t.clientX;
+      lastTouchY = t.clientY;
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (gameState !== 'playing') return;
+  for (const t of e.changedTouches) {
+    if (t.identifier === lookTouchId) {
+      const dx = t.clientX - lastTouchX;
+      const dy = t.clientY - lastTouchY;
+      const sens = isScoped ? 0.0028 : 0.0065;
+      yaw   -= dx * sens;
+      pitch -= dy * sens * 0.45;
+      yaw   = Math.max(-MAX_YAW,   Math.min(MAX_YAW,   yaw));
+      pitch = Math.max(MIN_PITCH,  Math.min(MAX_PITCH,  pitch));
+      lastTouchX = t.clientX;
+      lastTouchY = t.clientY;
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === lookTouchId) lookTouchId = null;
+  }
+}, { passive: false });
+
+// Touch UI buttons
+const scopeBtn = document.getElementById('scope-btn');
+const fireBtn  = document.getElementById('fire-btn');
+const pauseBtn = document.getElementById('touch-pause-btn');
+
+scopeBtn.addEventListener('touchstart', e => {
+  e.preventDefault(); e.stopPropagation();
+  if (gameState === 'playing') toggleScope();
+}, { passive: false });
+
+fireBtn.addEventListener('touchstart', e => {
+  e.preventDefault(); e.stopPropagation();
+  if (gameState === 'playing') { shoot(); fireBtn.classList.add('active'); }
+}, { passive: false });
+fireBtn.addEventListener('touchend', e => {
+  e.preventDefault();
+  fireBtn.classList.remove('active');
+}, { passive: false });
+
 function toggleScope() {
   isScoped = !isScoped;
   camera.fov = isScoped ? 15 : 75;
@@ -798,6 +974,8 @@ function toggleScope() {
   document.getElementById('crosshair').style.display   = isScoped ? 'none'  : 'block';
   document.getElementById('scope-indicator').style.opacity = isScoped ? '1' : '0';
   if (!isScoped && shootCooldown > 0) shootCooldown += 0.5;
+  // Update mobile scope button
+  document.getElementById('scope-btn').classList.toggle('scoped', isScoped);
 }
 
 // ════════════════════════════════════════════
@@ -978,6 +1156,7 @@ function startGame() {
   elapsedTime = 0; spawnTimer = 1.5;
   isScoped = false; canShoot = true; shootCooldown = 0;
   yaw = 0; pitch = -0.12;
+  lookTouchId = null;
 
   zombies.forEach(z => z.destroy()); zombies = [];
 
@@ -988,14 +1167,18 @@ function startGame() {
   document.getElementById('crosshair').style.display        = 'block';
   document.getElementById('scope-indicator').style.opacity  = '0';
   document.getElementById('pause-overlay').style.display    = 'none';
+  document.getElementById('scope-btn').classList.remove('scoped');
 
   camera.fov = 75; camera.updateProjectionMatrix();
-  canvas.requestPointerLock();
+  if (!isTouchDevice) canvas.requestPointerLock();
+  else pointerLocked = true; // Allow input on touch without pointer lock
 }
 
 function gameOver() {
   gameState = 'gameover';
-  document.exitPointerLock();
+  if (!isTouchDevice) document.exitPointerLock();
+  else pointerLocked = false;
+  lookTouchId = null;
   if (isScoped) { isScoped = false; document.getElementById('scope-wrap').style.display = 'none'; }
   const m = Math.floor(elapsedTime / 60);
   const s = Math.floor(elapsedTime % 60);
@@ -1010,10 +1193,23 @@ document.getElementById('retry-btn').addEventListener('click',  startGame);
 document.getElementById('title-btn').addEventListener('click', () => {
   zombies.forEach(z => z.destroy()); zombies = [];
   gameState = 'title';
+  lookTouchId = null;
   document.getElementById('gameover-screen').style.display = 'none';
   document.getElementById('title-screen').style.display    = 'flex';
   yaw = 0;
 });
+
+// Touch pause button
+document.getElementById('touch-pause-btn').addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (gameState === 'playing') {
+    gameState = 'paused';
+    document.getElementById('pause-overlay').style.display = 'block';
+  } else if (gameState === 'paused') {
+    gameState = 'playing';
+    document.getElementById('pause-overlay').style.display = 'none';
+  }
+}, { passive: false });
 
 // ════════════════════════════════════════════
 // MAIN LOOP
