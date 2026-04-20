@@ -1120,17 +1120,15 @@ function shoot() {
   }
 
   // ── リコイル適用 ──
-  const recoilAmt = isScoped ? 0.032 : 0.11;
-  recoilPitch -= recoilAmt;                               // 上方向キック
-  recoilYaw   += (Math.random() - 0.5) * recoilAmt * 0.5; // 微量左右ブレ
-  // リコイルが下限を超えないようクランプ（視野外に飛ばさない）
-  recoilPitch = Math.max(-0.25, recoilPitch);
+  // pitch/yaw 本体に直接加算（永続・元には戻らない）
+  const recoilAmt = isScoped ? 0.028 : 0.10;
+  pitch += recoilAmt;                                       // 上方向キック（正値 = 上向き）
+  yaw   += (Math.random() - 0.5) * recoilAmt * 0.55;       // ランダム横ブレ（永続）
+  pitch  = Math.max(MIN_PITCH, Math.min(MAX_PITCH, pitch)); // 範囲クランプ
 
-  // スコープ中は発砲でスコープ外れる揺れ感（強いリコイルで解除）
-  if (!isScoped) {
-    // 非スコープ時はさらに連射するほどリコイルが蓄積
-    recoilPitch -= recoilAmt * 0.15;
-  }
+  // 視覚的な瞬間スナップ（すぐ消える演出のみ）
+  recoilPitch = recoilAmt * 0.4;
+  recoilYaw   = (Math.random() - 0.5) * recoilAmt * 0.25;
 
   // 距離偏差HUD表示
   const dropLbl = getDropLabel(Math.round(estimatedDist));
@@ -1375,9 +1373,9 @@ function animate(t) {
     // Combo decay
     if (combo > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
 
-    // ── リコイル減衰（指数関数的に元に戻る）──
-    recoilPitch += (0 - recoilPitch) * Math.min(1, dt * RECOIL_RECOVERY);
-    recoilYaw   += (0 - recoilYaw)   * Math.min(1, dt * RECOIL_RECOVERY * 1.4);
+    // ── リコイル視覚スナップ減衰（演出のみ、素早く消える）──
+    recoilPitch *= Math.max(0, 1 - dt * 18);
+    recoilYaw   *= Math.max(0, 1 - dt * 22);
 
     // Spawn
     const diff = getDifficulty(elapsedTime);
