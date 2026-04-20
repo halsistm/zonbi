@@ -354,6 +354,12 @@ html, body { overscroll-behavior: none; touch-action: none; }
   <div class="scope-tick" id="tick2"></div>
   <div class="scope-tick" id="tick3"></div>
   <div id="scope-dist">0m</div>
+  <div id="scope-drop-label" style="
+    position:absolute; top: calc(50% + 38px); left: 50%;
+    transform: translateX(-50%);
+    font-size:10px; color:rgba(0,220,80,0.55);
+    letter-spacing:2px; text-align:center; white-space:nowrap;
+  "></div>
 </div>
 
 <!-- Flash / Danger -->
@@ -877,6 +883,10 @@ const MAX_YAW   =  160 * Math.PI / 180;
 const MAX_PITCH =  0.28;
 const MIN_PITCH = -0.55;
 
+// ── RECOIL ──
+let recoilPitch = 0, recoilYaw = 0;
+const RECOIL_RECOVERY = 9.0; // 回復速度（高いほど速い）
+
 function getDifficulty(t) {
   if (t < 60)  return { interval: 10, speed: 1.0, hp: 3 };
   if (t < 120) return { interval: 6,  speed: 1.3, hp: 4 };
@@ -1038,17 +1048,55 @@ function toggleScope() {
 // ════════════════════════════════════════════
 const raycaster = new THREE.Raycaster();
 
+// ── 距離偏差（仕様書準拠）──
+// 距離に応じた弾落ち量をNDC Y座標オフセットで返す
+function getBulletDrop(dist) {
+  if (dist <= 30)  return 0;
+  if (dist <= 60)  return -0.05;   // 5%下
+  if (dist <= 100) return -0.15;   // 15%下
+  return -0.30;                    // 30%下
+}
+
+// 距離偏差のラベル表示用
+function getDropLabel(dist) {
+  if (dist <= 30)  return null;
+  if (dist <= 60)  return '↓ 5%';
+  if (dist <= 100) return '↓ 15%';
+  return '↓ 30%';
+}
+
 function shoot() {
   if (!canShoot) return;
   muzzleFlash();
+
+  const allMeshes = [];
+  zombies.forEach(z => { if (!z.isDead && !z.isMissed) allMeshes.push(z.head, z.torso); });
+
+  // ── Step1: 照準中心で射線を飛ばして距離を測る ──
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const centerHits = raycaster.intersectObjects(allMeshes);
 
-  const meshes = [];
-  zombies.forEach(z => {
-    if (!z.isDead && !z.isMissed) meshes.push(z.head, z.torso);
-  });
+  // 距離推定：中心にヒットがあればその距離、なければ最近ゾンビへの距離
+  let estimatedDist = 120;
+  if (centerHits.length > 0) {
+    estimatedDist = centerHits[0].distance;
+  } else if (zombies.length > 0) {
+    // 近いゾンビへのおよその距離
+    let minD = Infinity;
+    zombies.forEach(z => { if (!z.isDead && !z.isMissed) minD = Math.min(minD, z.distanceToPlayer()); });
+    if (minD < Infinity) estimatedDist = minD;
+  }
 
-  const hits = raycaster.intersectObjects(meshes);
+  // ── Step2: 距離偏差オフセットで実際の着弾射線を再キャスト ──
+  const dropOffset = isScoped ? getBulletDrop(estimatedDist) : getBulletDrop(estimatedDist) * 1.8;
+  // スコープなしはさらに散弾補正（仕様書：命中率大幅低下）
+  const spreadX = isScoped ? 0 : (Math.random() - 0.5) * 0.18;
+  const spreadY = isScoped ? dropOffset : dropOffset + (Math.random() - 0.5) * 0.18;
+
+  raycaster.setFromCamera(new THREE.Vector2(spreadX, spreadY), camera);
+  const hits = raycaster.intersectObjects(allMeshes);
+
+  // ── 着弾判定 ──
   if (hits.length > 0) {
     const { zombie, part } = hits[0].object.userData;
     if (zombie && !zombie.isDead) {
@@ -1062,13 +1110,32 @@ function shoot() {
         const pts  = Math.round(base * mult);
         score += pts;
         updateScoreHUD();
-        if (part === 'head') showHit(`HEADSHOT  +${pts}`, '#ff2200');
-        else                  showHit(`KILL  +${pts}`,    '#ffaa00');
+        if (part === 'head') showHit(`HEAD SHOT  +${pts}`, '#ff2200');
+        else                  showHit(`KILL  +${pts}`,      '#ffaa00');
         if (combo >= 3)       showCombo(combo, mult);
       } else {
         showHit('HIT', '#ffffff');
       }
     }
+  }
+
+  // ── リコイル適用 ──
+  const recoilAmt = isScoped ? 0.032 : 0.11;
+  recoilPitch -= recoilAmt;                               // 上方向キック
+  recoilYaw   += (Math.random() - 0.5) * recoilAmt * 0.5; // 微量左右ブレ
+  // リコイルが下限を超えないようクランプ（視野外に飛ばさない）
+  recoilPitch = Math.max(-0.25, recoilPitch);
+
+  // スコープ中は発砲でスコープ外れる揺れ感（強いリコイルで解除）
+  if (!isScoped) {
+    // 非スコープ時はさらに連射するほどリコイルが蓄積
+    recoilPitch -= recoilAmt * 0.15;
+  }
+
+  // 距離偏差HUD表示
+  const dropLbl = getDropLabel(Math.round(estimatedDist));
+  if (dropLbl && isScoped) {
+    showHit(dropLbl + `  ${Math.round(estimatedDist)}m`, '#88ddff');
   }
 
   canShoot = false;
@@ -1197,8 +1264,22 @@ function updateScopeDist() {
   const meshes = [];
   zombies.forEach(z => { if (!z.isDead) meshes.push(z.head, z.torso); });
   const hits = raycaster.intersectObjects(meshes);
-  const dist = hits.length > 0 ? Math.round(hits[0].distance) : '---';
-  document.getElementById('scope-dist').textContent = dist + 'm';
+  const dist = hits.length > 0 ? Math.round(hits[0].distance) : null;
+  const distEl = document.getElementById('scope-dist');
+  if (dist !== null) {
+    const drop = getDropLabel(dist);
+    distEl.textContent = dist + 'm' + (drop ? '  ' + drop : '  ✓');
+    distEl.style.color = dist > 100 ? 'rgba(255,120,60,0.85)' :
+                         dist > 60  ? 'rgba(255,220,60,0.85)' :
+                                      'rgba(0,220,80,0.75)';
+    const lbl = document.getElementById('scope-drop-label');
+    if (lbl) lbl.textContent = dist > 30 ? `弾落ち補正 ${dist > 100 ? '大' : dist > 60 ? '中' : '小'}` : '';
+  } else {
+    distEl.textContent = '---m';
+    distEl.style.color = 'rgba(0,220,80,0.5)';
+    const lbl = document.getElementById('scope-drop-label');
+    if (lbl) lbl.textContent = '';
+  }
 }
 
 // ════════════════════════════════════════════
@@ -1211,6 +1292,7 @@ function startGame() {
   elapsedTime = 0; spawnTimer = 1.5;
   isScoped = false; canShoot = true; shootCooldown = 0;
   yaw = 0; pitch = -0.12;
+  recoilPitch = 0; recoilYaw = 0;
   lookTouchId = null;
 
   zombies.forEach(z => z.destroy()); zombies = [];
@@ -1293,6 +1375,10 @@ function animate(t) {
     // Combo decay
     if (combo > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
 
+    // ── リコイル減衰（指数関数的に元に戻る）──
+    recoilPitch += (0 - recoilPitch) * Math.min(1, dt * RECOIL_RECOVERY);
+    recoilYaw   += (0 - recoilYaw)   * Math.min(1, dt * RECOIL_RECOVERY * 1.4);
+
     // Spawn
     const diff = getDifficulty(elapsedTime);
     spawnTimer -= dt;
@@ -1313,12 +1399,12 @@ function animate(t) {
     });
     for (let i = toRemove.length - 1; i >= 0; i--) zombies.splice(toRemove[i], 1);
 
-    // Camera
-    camera.rotation.y = yaw;
-    camera.rotation.x = pitch;
+    // Camera（リコイルオフセット加算）
+    camera.rotation.y = yaw   + recoilYaw;
+    camera.rotation.x = pitch + recoilPitch;
 
-    // Scope dist
-    if (isScoped && kills % 3 === 0) updateScopeDist();
+    // Scope dist（スコープ中は毎フレーム更新）
+    if (isScoped) updateScopeDist();
 
     drawMinimap();
 
