@@ -824,35 +824,16 @@ class Zombie {
 
     const root = gltf.scene;
 
-    // ── Reliable scale calculation ──
-    // 1) Find Armature node scale (Blender cm→m correction, typically 0.01)
-    let armatureScale = 1;
-    root.traverse(obj => {
-      if (obj.name === 'Armature' || (obj.isObject3D && !obj.isMesh && obj.scale.x < 0.1 && obj.scale.x > 0)) {
-        armatureScale = obj.scale.x;
-      }
-    });
-
-    // 2) Get raw geometry height (vertex positions, no transforms)
-    let geomMinY = Infinity, geomMaxY = -Infinity;
-    root.traverse(obj => {
-      if (obj.isMesh) {
-        obj.geometry.computeBoundingBox();
-        geomMinY = Math.min(geomMinY, obj.geometry.boundingBox.min.y);
-        geomMaxY = Math.max(geomMaxY, obj.geometry.boundingBox.max.y);
-      }
-    });
-
-    // 3) Natural world height = raw height × armature scale
-    const rawH = geomMaxY - geomMinY;
-    const naturalH = rawH * armatureScale;
+    // ── Reliable scale calculation using Box3 ──
+    // Compute actual bounding box in local space (includes all child transforms)
+    const box = new THREE.Box3().setFromObject(root);
+    const naturalH = box.max.y - box.min.y;
     const desiredH = 1.8; // metres
     const scaleFactor = naturalH > 0.0001 ? desiredH / naturalH : 1;
     root.scale.setScalar(scaleFactor);
 
-    // 4) Ground the model (feet at y=0)
-    //    foot offset in world = geomMinY * armatureScale * scaleFactor
-    root.position.y = -(geomMinY * armatureScale * scaleFactor);
+    // Ground the model (feet at y=0)
+    root.position.y = -box.min.y * scaleFactor;
 
     this.group.add(root);
     this._modelRoot = root;
