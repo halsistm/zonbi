@@ -419,6 +419,7 @@ html, body { overscroll-behavior: none; touch-action: none; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script>
 'use strict';
 
@@ -737,11 +738,47 @@ glowMesh.position.set(0, 5, -110);
 scene.add(glowMesh);
 
 // ════════════════════════════════════════════
-// ZOMBIE CLASS
+// ZOMBIE CLASS (GLB model)
 // ════════════════════════════════════════════
 const MISS_Z = 7;
 const SPAWN_Z_NEAR = -55;
 const SPAWN_Z_FAR  = -95;
+
+// GLB preloader — loads once, cloned per zombie
+let _glbTemplate = null;
+let _glbLoading  = false;
+let _glbCallbacks = [];
+
+function loadGLBTemplate(onReady) {
+  if (_glbTemplate) { onReady(_glbTemplate); return; }
+  _glbCallbacks.push(onReady);
+  if (_glbLoading) return;
+  _glbLoading = true;
+
+  // Fetch the GLB file, convert to object URL, then load via GLTFLoader
+  fetch('Untitled.glb')
+    .then(r => r.blob())
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      const loader = new THREE.GLTFLoader();
+      loader.load(url, gltf => {
+        URL.revokeObjectURL(url);
+        _glbTemplate = gltf;
+        _glbCallbacks.forEach(cb => cb(_glbTemplate));
+        _glbCallbacks = [];
+      }, undefined, err => console.error('GLB load error:', err));
+    })
+    .catch(err => {
+      console.error('GLB fetch error:', err);
+      // Fallback: try loading directly if served from same directory
+      const loader = new THREE.GLTFLoader();
+      loader.load('Untitled.glb', gltf => {
+        _glbTemplate = gltf;
+        _glbCallbacks.forEach(cb => cb(_glbTemplate));
+        _glbCallbacks = [];
+      });
+    });
+}
 
 class Zombie {
   constructor(x, z, hp, speed) {
@@ -751,85 +788,140 @@ class Zombie {
     this.isDead = false;
     this.isMissed = false;
     this.dyingTimer = 0;
-    this.walkPhase = Math.random() * Math.PI * 2;
+    this.mixer = null;
+    this.walkAction = null;
 
     this.group = new THREE.Group();
-
-    const hue = 0.3 + Math.random() * 0.1;
-    const skinColor = new THREE.Color().setHSL(hue, 0.22, 0.32 + Math.random()*0.12);
-    const clothHue  = Math.random();
-    const clothColor = new THREE.Color().setHSL(clothHue, 0.18, 0.12 + Math.random()*0.08);
-    // Pick a random pre-built cloth texture
-    const clothTex = TX_CLOTHS[(Math.random()*TX_CLOTHS.length)|0];
-
-    // Torso
-    this.torso = new THREE.Mesh(
-      new THREE.BoxGeometry(0.66, 1.05, 0.4),
-      new THREE.MeshStandardMaterial({ map: clothTex, color: clothColor, roughness: 0.88, metalness: 0.0 })
-    );
-    this.torso.position.y = 0.93;
-    this.torso.castShadow = true;
-
-    // Head
-    this.head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.27, 8, 6),
-      new THREE.MeshStandardMaterial({ map: TX_SKIN, color: skinColor, roughness: 0.82, metalness: 0.0 })
-    );
-    this.head.position.y = 1.68;
-    this.head.castShadow = true;
-
-    // Legs
-    const legMat = new THREE.MeshStandardMaterial({ map: clothTex, color: clothColor.clone().multiplyScalar(0.65), roughness: 0.9, metalness: 0.0 });
-    this.legL = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.82, 0.24), legMat);
-    this.legR = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.82, 0.24), legMat.clone());
-    this.legL.position.set(-0.19, 0.41, 0);
-    this.legR.position.set( 0.19, 0.41, 0);
-
-    // Arms (zombie reach)
-    const armMat = new THREE.MeshStandardMaterial({ map: TX_SKIN, color: skinColor, roughness: 0.82, metalness: 0.0 });
-    this.armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.78, 0.2), armMat);
-    this.armR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.78, 0.2), armMat.clone());
-    this.armL.position.set(-0.45, 0.92, 0);
-    this.armR.position.set( 0.45, 0.92, 0);
-
-    this.group.add(this.torso, this.head, this.legL, this.legR, this.armL, this.armR);
     this.group.position.set(x, 0, z);
     scene.add(this.group);
 
-    // Raycasting tags
+    // Raycasting placeholder meshes (invisible, match model bounds)
+    // Will be replaced once GLB is loaded
+    this.torso = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 1.0, 0.4),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    this.torso.position.y = 0.9;
+    this.head = new THREE.Mesh(
+      new THREE.SphereGeometry(0.25, 6, 4),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    this.head.position.y = 1.7;
+    this.group.add(this.torso, this.head);
+
     this.torso.userData = { zombie: this, part: 'body' };
     this.head.userData  = { zombie: this, part: 'head' };
+
+    this._meshes = []; // all skinned/visual meshes for flash effect
+    this._loaded = false;
+
+    loadGLBTemplate(gltf => this._onGLBLoaded(gltf));
+  }
+
+  _onGLBLoaded(gltf) {
+    if (this.isDead || this.isMissed) return; // spawned and died before load
+
+    // Clone scene graph
+    const clone = gltf.scene.clone(true);
+
+    // Auto-scale: fit model to ~1.8 units tall
+    const bbox = new THREE.Box3().setFromObject(clone);
+    const modelH = bbox.max.y - bbox.min.y;
+    const desiredH = 1.8;
+    const scaleFactor = modelH > 0 ? desiredH / modelH : 1;
+    clone.scale.setScalar(scaleFactor);
+
+    // Recompute bbox after scale to find foot offset
+    const bbox2 = new THREE.Box3().setFromObject(clone);
+    // Shift so feet sit at y=0
+    clone.position.y = -bbox2.min.y;
+
+    this.group.add(clone);
+    this._modelRoot = clone;
+
+    // Collect all meshes
+    clone.traverse(obj => {
+      if (obj.isMesh) {
+        obj.castShadow = true;
+        this._meshes.push(obj);
+        // Tag for raycasting — classify by world-space Y midpoint
+        obj.userData = { zombie: this, part: 'body' };
+      }
+    });
+
+    // Head / torso hitbox sizing from model bounds
+    const fullH = bbox2.max.y - bbox2.min.y;
+    const headY = fullH * 0.82;
+    const torsoY = fullH * 0.5;
+
+    // Resize invisible hitboxes to match model
+    this.group.remove(this.torso);
+    this.group.remove(this.head);
+
+    this.torso = new THREE.Mesh(
+      new THREE.BoxGeometry(fullH * 0.38, fullH * 0.44, fullH * 0.28),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    this.torso.position.y = torsoY;
+    this.torso.userData = { zombie: this, part: 'body' };
+
+    this.head = new THREE.Mesh(
+      new THREE.SphereGeometry(fullH * 0.13, 6, 4),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    this.head.position.y = headY;
+    this.head.userData = { zombie: this, part: 'head' };
+
+    this.group.add(this.torso, this.head);
+
+    // Animations — clone and remap
+    if (gltf.animations && gltf.animations.length > 0) {
+      this.mixer = new THREE.AnimationMixer(clone);
+
+      // Re-map animation clips to cloned skeleton
+      const remappedClips = gltf.animations.map(clip =>
+        THREE.AnimationClip.parse(THREE.AnimationClip.toJSON(clip))
+      );
+
+      // Prefer a "walk" animation; fall back to first
+      const walkClip =
+        remappedClips.find(c => /walk/i.test(c.name)) ||
+        remappedClips.find(c => /run/i.test(c.name)) ||
+        remappedClips[0];
+
+      this.walkAction = this.mixer.clipAction(walkClip, clone);
+      this.walkAction.setLoop(THREE.LoopRepeat, Infinity);
+      // Speed-scale animation to match movement speed
+      this.walkAction.timeScale = this.speed * 0.9;
+      this.walkAction.play();
+    }
+
+    this._loaded = true;
   }
 
   update(dt) {
     if (this.isDead) {
       this.dyingTimer += dt;
-      this.group.rotation.z = Math.min(Math.PI/2, this.dyingTimer * 2.8);
+      this.group.rotation.z = Math.min(Math.PI / 2, this.dyingTimer * 2.8);
       this.group.position.y = -Math.min(0.6, this.dyingTimer * 0.5);
+      if (this.mixer) this.mixer.update(dt);
       if (this.dyingTimer > 1.8) { scene.remove(this.group); return 'remove'; }
       return 'dead';
     }
-    // Pathfind toward player column
+
+    // Move toward player
     const tx = 0, tz = MISS_Z;
     const dx = tx - this.group.position.x;
     const dz = tz - this.group.position.z;
-    const dist = Math.sqrt(dx*dx + dz*dz);
+    const dist = Math.sqrt(dx * dx + dz * dz);
     if (dist > 0.4) {
       const inv = 1 / dist;
       this.group.position.x += dx * inv * this.speed * dt;
       this.group.position.z += dz * inv * this.speed * dt;
       this.group.rotation.y = Math.atan2(dx, dz);
     }
-    // Walk animation
-    this.walkPhase += dt * this.speed * 5.5;
-    const sw = Math.sin(this.walkPhase);
-    const cw = Math.cos(this.walkPhase);
-    this.legL.rotation.x = sw * 0.55;
-    this.legR.rotation.x = -sw * 0.55;
-    // Zombie outstretched arms
-    this.armL.rotation.x = -0.7 + cw * 0.2;
-    this.armR.rotation.x = -0.7 - cw * 0.2;
-    this.torso.rotation.z = sw * 0.1;
+
+    if (this.mixer) this.mixer.update(dt);
 
     if (this.group.position.z >= MISS_Z && !this.isMissed) {
       this.isMissed = true;
@@ -842,19 +934,31 @@ class Zombie {
   takeDamage(part) {
     if (this.isDead) return false;
     this.hp -= (part === 'head') ? this.hp : 1;
-    // Flash
-    [this.torso, this.head, this.legL, this.legR].forEach(m => {
-      m.material.emissive = new THREE.Color(0.55, 0, 0);
-      m.material.emissiveIntensity = 1.0;
+    // Flash red
+    this._meshes.forEach(m => {
+      if (m.material) {
+        if (Array.isArray(m.material)) {
+          m.material.forEach(mat => { if (mat.emissive) { mat.emissive.set(0.6, 0, 0); mat.emissiveIntensity = 1.0; } });
+        } else if (m.material.emissive) {
+          m.material.emissive.set(0.6, 0, 0);
+          m.material.emissiveIntensity = 1.0;
+        }
+      }
     });
     setTimeout(() => {
       if (!this.isDead) {
-        [this.torso, this.head, this.legL, this.legR].forEach(m => {
-          if (m.material) { m.material.emissive = new THREE.Color(0,0,0); m.material.emissiveIntensity = 0; }
+        this._meshes.forEach(m => {
+          if (!m.material) return;
+          const mats = Array.isArray(m.material) ? m.material : [m.material];
+          mats.forEach(mat => { if (mat.emissive) { mat.emissive.set(0, 0, 0); mat.emissiveIntensity = 0; } });
         });
       }
     }, 90);
-    if (this.hp <= 0) { this.isDead = true; return true; }
+    if (this.hp <= 0) {
+      this.isDead = true;
+      if (this.mixer) this.mixer.stopAllAction();
+      return true;
+    }
     return false;
   }
 
@@ -864,7 +968,7 @@ class Zombie {
     const px = camera.position.x, pz = camera.position.z;
     const dx = this.group.position.x - px;
     const dz = this.group.position.z - pz;
-    return Math.sqrt(dx*dx + dz*dz);
+    return Math.sqrt(dx * dx + dz * dz);
   }
 }
 
