@@ -745,41 +745,34 @@ const MISS_Z = 7;
 const SPAWN_Z_NEAR = -55;
 const SPAWN_Z_FAR  = -95;
 
-// GLB preloader — loads each file once, cloned per zombie
-const _glbTemplates   = { 'Untitled.glb': null, 'Untitled2.glb': null };
-const _glbLoadingMap  = { 'Untitled.glb': false, 'Untitled2.glb': false };
-const _glbCallbackMap = { 'Untitled.glb': [], 'Untitled2.glb': [] };
+// GLB blob URL cache — fetch blob once, re-parse per zombie (avoids skeleton clone bugs)
+const _glbBlobUrls   = {};
+const _glbFetching   = {};
+const _glbFetchCbs   = {};
 
-function loadGLBTemplate(filename, onReady) {
-  if (_glbTemplates[filename]) { onReady(_glbTemplates[filename]); return; }
-  _glbCallbackMap[filename].push(onReady);
-  if (_glbLoadingMap[filename]) return;
-  _glbLoadingMap[filename] = true;
-
-  const loader = new THREE.GLTFLoader();
+function fetchGLBUrl(filename, onReady) {
+  if (_glbBlobUrls[filename]) { onReady(_glbBlobUrls[filename]); return; }
+  if (!_glbFetchCbs[filename]) _glbFetchCbs[filename] = [];
+  _glbFetchCbs[filename].push(onReady);
+  if (_glbFetching[filename]) return;
+  _glbFetching[filename] = true;
   fetch(filename)
     .then(r => r.blob())
     .then(blob => {
-      const url = URL.createObjectURL(blob);
-      loader.load(url, gltf => {
-        URL.revokeObjectURL(url);
-        _glbTemplates[filename] = gltf;
-        _glbCallbackMap[filename].forEach(cb => cb(gltf));
-        _glbCallbackMap[filename] = [];
-      }, undefined, err => console.error('GLB load error:', filename, err));
+      _glbBlobUrls[filename] = URL.createObjectURL(blob);
+      _glbFetchCbs[filename].forEach(cb => cb(_glbBlobUrls[filename]));
+      _glbFetchCbs[filename] = [];
     })
     .catch(() => {
-      loader.load(filename, gltf => {
-        _glbTemplates[filename] = gltf;
-        _glbCallbackMap[filename].forEach(cb => cb(gltf));
-        _glbCallbackMap[filename] = [];
-      });
+      _glbBlobUrls[filename] = filename; // fallback to direct path
+      _glbFetchCbs[filename].forEach(cb => cb(filename));
+      _glbFetchCbs[filename] = [];
     });
 }
 
-// Pre-warm both models at startup
-loadGLBTemplate('Untitled.glb',  () => {});
-loadGLBTemplate('Untitled2.glb', () => {});
+// Pre-fetch both GLBs at startup
+fetchGLBUrl('Untitled.glb',  () => {});
+fetchGLBUrl('Untitled2.glb', () => {});
 
 class Zombie {
   constructor(x, z, hp, speed) {
@@ -813,59 +806,60 @@ class Zombie {
     this.torso.userData = { zombie: this, part: 'body' };
     this.head.userData  = { zombie: this, part: 'head' };
 
-    this._meshes = []; // all skinned/visual meshes for flash effect
+    this._meshes = [];
     this._loaded = false;
 
-    // Pick a random GLB model
+    // Pick random model, load fresh instance (no skeleton-clone bugs)
     this._glbFile = Math.random() < 0.5 ? 'Untitled.glb' : 'Untitled2.glb';
-    loadGLBTemplate(this._glbFile, gltf => this._onGLBLoaded(gltf));
+    fetchGLBUrl(this._glbFile, url => {
+      if (this.isDead || this.isMissed) return;
+      const loader = new THREE.GLTFLoader();
+      loader.load(url, gltf => this._onGLBLoaded(gltf),
+                  undefined, err => console.error('Zombie load error:', err));
+    });
   }
 
   _onGLBLoaded(gltf) {
     if (this.isDead || this.isMissed) return;
 
-    // SkeletonUtils.clone properly reconnects bones for SkinnedMesh
-    const clone = THREE.SkeletonUtils.clone(gltf.scene);
+    const root = gltf.scene;
 
-    // Force-update world matrices so Box3 gets correct values
-    clone.updateMatrixWorld(true);
-
-    // Compute bounding box from actual mesh geometry + node transforms
-    const bbox = new THREE.Box3();
-    clone.traverse(obj => {
-      if (obj.isMesh) {
-        obj.geometry.computeBoundingBox();
-        const gb = obj.geometry.boundingBox.clone();
-        gb.applyMatrix4(obj.matrixWorld);
-        bbox.union(gb);
+    // ── Reliable scale calculation ──
+    // 1) Find Armature node scale (Blender cm→m correction, typically 0.01)
+    let armatureScale = 1;
+    root.traverse(obj => {
+      if (obj.name === 'Armature' || (obj.isObject3D && !obj.isMesh && obj.scale.x < 0.1 && obj.scale.x > 0)) {
+        armatureScale = obj.scale.x;
       }
     });
 
-    const modelH = bbox.max.y - bbox.min.y;
-    const desiredH = 1.8;
-    const scaleFactor = modelH > 0.001 ? desiredH / modelH : 1;
-    clone.scale.setScalar(scaleFactor);
-    clone.updateMatrixWorld(true);
-
-    // Recompute after scale to find foot offset
-    const bbox2 = new THREE.Box3();
-    clone.traverse(obj => {
+    // 2) Get raw geometry height (vertex positions, no transforms)
+    let geomMinY = Infinity, geomMaxY = -Infinity;
+    root.traverse(obj => {
       if (obj.isMesh) {
         obj.geometry.computeBoundingBox();
-        const gb = obj.geometry.boundingBox.clone();
-        gb.applyMatrix4(obj.matrixWorld);
-        bbox2.union(gb);
+        geomMinY = Math.min(geomMinY, obj.geometry.boundingBox.min.y);
+        geomMaxY = Math.max(geomMaxY, obj.geometry.boundingBox.max.y);
       }
     });
 
-    // Shift so feet sit at y=0 relative to group
-    clone.position.y = -bbox2.min.y;
+    // 3) Natural world height = raw height × armature scale
+    const rawH = geomMaxY - geomMinY;
+    const naturalH = rawH * armatureScale;
+    const desiredH = 1.8; // metres
+    const scaleFactor = naturalH > 0.0001 ? desiredH / naturalH : 1;
+    root.scale.setScalar(scaleFactor);
 
-    this.group.add(clone);
-    this._modelRoot = clone;
+    // 4) Ground the model (feet at y=0)
+    //    foot offset in world = geomMinY * armatureScale * scaleFactor
+    root.position.y = -(geomMinY * armatureScale * scaleFactor);
 
-    // Collect all meshes for hit-flash effect
-    clone.traverse(obj => {
+    this.group.add(root);
+    this._modelRoot = root;
+
+    // Collect meshes
+    const fullH = desiredH;
+    root.traverse(obj => {
       if (obj.isMesh) {
         obj.castShadow = true;
         this._meshes.push(obj);
@@ -873,11 +867,7 @@ class Zombie {
       }
     });
 
-    // Update invisible hitboxes to match actual model size
-    const fullH = bbox2.max.y - bbox2.min.y;
-    const headY  = fullH * 0.87;
-    const torsoY = fullH * 0.52;
-
+    // Invisible hitboxes
     this.group.remove(this.torso);
     this.group.remove(this.head);
 
@@ -885,28 +875,26 @@ class Zombie {
       new THREE.BoxGeometry(fullH * 0.36, fullH * 0.40, fullH * 0.26),
       new THREE.MeshBasicMaterial({ visible: false })
     );
-    this.torso.position.y = torsoY;
+    this.torso.position.y = fullH * 0.52;
     this.torso.userData = { zombie: this, part: 'body' };
 
     this.head = new THREE.Mesh(
       new THREE.SphereGeometry(fullH * 0.12, 6, 4),
       new THREE.MeshBasicMaterial({ visible: false })
     );
-    this.head.position.y = headY;
+    this.head.position.y = fullH * 0.87;
     this.head.userData = { zombie: this, part: 'head' };
 
     this.group.add(this.torso, this.head);
 
-    // Animations — SkeletonUtils clone works directly with original clips
+    // Animations
     if (gltf.animations && gltf.animations.length > 0) {
-      this.mixer = new THREE.AnimationMixer(clone);
-
-      const walkClip =
+      this.mixer = new THREE.AnimationMixer(root);
+      const clip =
         gltf.animations.find(c => /walk/i.test(c.name)) ||
         gltf.animations.find(c => /run/i.test(c.name))  ||
         gltf.animations[0];
-
-      this.walkAction = this.mixer.clipAction(walkClip);
+      this.walkAction = this.mixer.clipAction(clip);
       this.walkAction.setLoop(THREE.LoopRepeat, Infinity);
       this.walkAction.timeScale = this.speed * 0.9;
       this.walkAction.play();
