@@ -97,39 +97,74 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
   pointer-events: none; z-index: 15; display: none;
 }
+/* 外側暗幕（スコープ円形開口） */
 #scope-lens {
   position: absolute;
-  width: 58vmin; height: 58vmin;
+  width: 62vmin; height: 62vmin;
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: transparent;
-  box-shadow: 0 0 0 9999px rgba(0,0,0,0.94);
-  border: 2px solid rgba(0,200,80,0.5);
+  box-shadow:
+    0 0 0 9999px rgba(0,0,0,0.96),
+    inset 0 0 40px rgba(0,0,0,0.4);
+  border: 3px solid rgba(0,180,60,0.55);
+  z-index: 1;
 }
+/* レンズガラス反射 */
 #scope-lens::before {
   content: '';
-  position: absolute; inset: 3px;
+  position: absolute; inset: 0;
   border-radius: 50%;
-  border: 1px solid rgba(0,200,80,0.2);
+  background: radial-gradient(
+    ellipse at 35% 30%,
+    rgba(120,200,255,0.07) 0%,
+    rgba(0,0,0,0) 60%
+  );
 }
-.scope-line {
-  position: absolute; background: rgba(0,200,80,0.55);
+/* レンズ周縁暗部 */
+#scope-lens::after {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at center,
+    transparent 60%,
+    rgba(0,0,0,0.35) 100%
+  );
+}
+/* SVGレティクル */
+#scope-reticle {
+  position: absolute;
+  width: 62vmin; height: 62vmin;
   top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  overflow: visible;
 }
-#scope-h { width: 58vmin; height: 1px; transform: translate(-50%, -50%); }
-#scope-v { width: 1px; height: 58vmin; transform: translate(-50%, -50%); }
-.scope-tick {
-  position: absolute; background: rgba(0,200,80,0.4);
-  top: 50%; left: 50%;
-}
-#tick1 { width: 14px; height: 1px; transform: translate(-50%, calc(-50% + 30px)); }
-#tick2 { width: 10px; height: 1px; transform: translate(-50%, calc(-50% + 60px)); }
-#tick3 { width: 6px; height: 1px; transform: translate(-50%, calc(-50% + 90px)); }
-#scope-dist {
-  position: absolute; bottom: 12px; right: 16px;
-  font-size: 11px; color: rgba(0,220,80,0.7);
+/* 距離表示パネル */
+#scope-info-panel {
+  position: absolute;
+  bottom: calc(50% - 31vmin + 2vmin);
+  left: 50%; transform: translateX(-50%);
+  text-align: center;
+  z-index: 3;
+  font-family: 'Courier New', monospace;
   letter-spacing: 2px;
+}
+#scope-range-label {
+  font-size: 9px; color: rgba(0,200,70,0.5);
+  letter-spacing: 3px; display: block; margin-bottom: 1px;
+}
+#scope-dist {
+  font-size: 18px; font-weight: bold;
+  color: rgba(0,230,90,0.9);
+  text-shadow: 0 0 8px rgba(0,200,70,0.6);
+  display: block;
+}
+#scope-drop-label {
+  font-size: 10px; color: rgba(0,200,70,0.55);
+  letter-spacing: 2px; display: block; margin-top: 2px;
 }
 
 /* ── FLASH ── */
@@ -347,19 +382,106 @@ html, body { overscroll-behavior: none; touch-action: none; }
 
 <!-- Scope overlay -->
 <div id="scope-wrap">
+  <!-- 外側暗幕＆レンズ -->
   <div id="scope-lens"></div>
-  <div class="scope-line" id="scope-h"></div>
-  <div class="scope-line" id="scope-v"></div>
-  <div class="scope-tick" id="tick1"></div>
-  <div class="scope-tick" id="tick2"></div>
-  <div class="scope-tick" id="tick3"></div>
-  <div id="scope-dist">0m</div>
-  <div id="scope-drop-label" style="
-    position:absolute; top: calc(50% + 38px); left: 50%;
-    transform: translateX(-50%);
-    font-size:10px; color:rgba(0,220,80,0.55);
-    letter-spacing:2px; text-align:center; white-space:nowrap;
-  "></div>
+
+  <!-- SVGミルドットレティクル -->
+  <svg id="scope-reticle" viewBox="-310 -310 620 620" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <clipPath id="lens-clip">
+        <circle cx="0" cy="0" r="298"/>
+      </clipPath>
+    </defs>
+    <g clip-path="url(#lens-clip)">
+
+      <!-- ═══ メインクロスヘア ═══ -->
+      <!-- 水平線（左） -->
+      <line x1="-298" y1="0" x2="-38" y2="0" stroke="rgba(0,220,80,0.72)" stroke-width="1.2"/>
+      <!-- 水平線（右） -->
+      <line x1="38" y1="0" x2="298" y2="0" stroke="rgba(0,220,80,0.72)" stroke-width="1.2"/>
+      <!-- 垂直線（上） -->
+      <line x1="0" y1="-298" x2="0" y2="-38" stroke="rgba(0,220,80,0.72)" stroke-width="1.2"/>
+      <!-- 垂直線（下） -->
+      <line x1="0" y1="38" x2="0" y2="298" stroke="rgba(0,220,80,0.72)" stroke-width="1.2"/>
+      <!-- 中心ドット -->
+      <circle cx="0" cy="0" r="2.2" fill="rgba(0,230,90,0.95)"/>
+
+      <!-- ═══ 水平ミルドット（射程推定用） ═══ -->
+      <!-- 左側 -->
+      <circle cx="-55"  cy="0" r="2.8" fill="rgba(0,210,75,0.7)"/>
+      <line x1="-55" y1="-6" x2="-55" y2="6" stroke="rgba(0,210,75,0.5)" stroke-width="1"/>
+
+      <circle cx="-110" cy="0" r="2.8" fill="rgba(0,210,75,0.75)"/>
+      <line x1="-110" y1="-8" x2="-110" y2="8" stroke="rgba(0,210,75,0.55)" stroke-width="1"/>
+
+      <circle cx="-165" cy="0" r="2.8" fill="rgba(0,210,75,0.7)"/>
+      <line x1="-165" y1="-6" x2="-165" y2="6" stroke="rgba(0,210,75,0.5)" stroke-width="1"/>
+
+      <circle cx="-220" cy="0" r="2.8" fill="rgba(0,210,75,0.65)"/>
+      <line x1="-220" y1="-6" x2="-220" y2="6" stroke="rgba(0,210,75,0.45)" stroke-width="1"/>
+
+      <!-- 右側 -->
+      <circle cx="55"  cy="0" r="2.8" fill="rgba(0,210,75,0.7)"/>
+      <line x1="55" y1="-6" x2="55" y2="6" stroke="rgba(0,210,75,0.5)" stroke-width="1"/>
+
+      <circle cx="110" cy="0" r="2.8" fill="rgba(0,210,75,0.75)"/>
+      <line x1="110" y1="-8" x2="110" y2="8" stroke="rgba(0,210,75,0.55)" stroke-width="1"/>
+
+      <circle cx="165" cy="0" r="2.8" fill="rgba(0,210,75,0.7)"/>
+      <line x1="165" y1="-6" x2="165" y2="6" stroke="rgba(0,210,75,0.5)" stroke-width="1"/>
+
+      <circle cx="220" cy="0" r="2.8" fill="rgba(0,210,75,0.65)"/>
+      <line x1="220" y1="-6" x2="220" y2="6" stroke="rgba(0,210,75,0.45)" stroke-width="1"/>
+
+      <!-- ═══ 垂直ミルドット（上方向） ═══ -->
+      <circle cx="0" cy="-55"  r="2.8" fill="rgba(0,210,75,0.7)"/>
+      <circle cx="0" cy="-110" r="2.8" fill="rgba(0,210,75,0.75)"/>
+      <circle cx="0" cy="-165" r="2.8" fill="rgba(0,210,75,0.7)"/>
+      <circle cx="0" cy="-220" r="2.8" fill="rgba(0,210,75,0.65)"/>
+
+      <!-- ═══ 弾落ち補正スタジア（下方向） ═══ -->
+      <!-- ~60m ホールドオーバー -->
+      <line x1="-22" y1="60" x2="22" y2="60" stroke="rgba(0,220,80,0.85)" stroke-width="1.8"/>
+      <circle cx="0" cy="60" r="2.5" fill="rgba(0,220,80,0.8)"/>
+      <text x="28" y="64" fill="rgba(0,210,75,0.75)" font-size="16" font-family="Courier New,monospace">60m</text>
+      <line x1="-8" y1="55" x2="-8" y2="65" stroke="rgba(0,200,70,0.3)" stroke-width="0.8"/>
+
+      <!-- ~100m ホールドオーバー -->
+      <line x1="-18" y1="120" x2="18" y2="120" stroke="rgba(0,220,80,0.78)" stroke-width="1.8"/>
+      <circle cx="0" cy="120" r="2.5" fill="rgba(0,220,80,0.75)"/>
+      <text x="24" y="124" fill="rgba(0,210,75,0.68)" font-size="16" font-family="Courier New,monospace">100m</text>
+
+      <!-- ~150m+ ホールドオーバー -->
+      <line x1="-14" y1="205" x2="14" y2="205" stroke="rgba(0,220,80,0.65)" stroke-width="1.5"/>
+      <circle cx="0" cy="205" r="2" fill="rgba(0,220,80,0.65)"/>
+      <text x="20" y="209" fill="rgba(0,210,75,0.55)" font-size="14" font-family="Courier New,monospace">150m+</text>
+
+      <!-- ═══ 距離パネル（スコープ内下部） ═══ -->
+      <line x1="-60" y1="258" x2="60" y2="258" stroke="rgba(0,180,60,0.3)" stroke-width="0.8"/>
+      <text x="0" y="250" text-anchor="middle"
+            fill="rgba(0,190,65,0.5)" font-size="13"
+            font-family="Courier New,monospace" letter-spacing="3">RANGE</text>
+      <text id="scope-dist" x="0" y="275" text-anchor="middle"
+            fill="rgba(0,230,90,0.9)" font-size="22" font-weight="bold"
+            font-family="Courier New,monospace" letter-spacing="4">---m</text>
+      <text id="scope-drop-label" x="0" y="291" text-anchor="middle"
+            fill="rgba(0,200,70,0.55)" font-size="12"
+            font-family="Courier New,monospace" letter-spacing="2"></text>
+
+      <!-- ═══ 左パネル（風偏・仰角ラベル） ═══ -->
+      <text x="-290" y="-20" fill="rgba(0,190,65,0.4)" font-size="11" font-family="Courier New,monospace">ELEV</text>
+      <text x="-290" y="-5" fill="rgba(0,190,65,0.4)" font-size="11" font-family="Courier New,monospace">0.00</text>
+      <text x="-290" y="12" fill="rgba(0,190,65,0.4)" font-size="11" font-family="Courier New,monospace">WIND</text>
+      <text x="-290" y="27" fill="rgba(0,190,65,0.4)" font-size="11" font-family="Courier New,monospace">0.00</text>
+
+    </g><!-- /clip -->
+
+    <!-- レンズリム -->
+    <circle cx="0" cy="0" r="298" fill="none" stroke="rgba(0,180,60,0.5)" stroke-width="2.5"/>
+    <circle cx="0" cy="0" r="294" fill="none" stroke="rgba(0,180,60,0.18)" stroke-width="1"/>
+  </svg>
+
+  <!-- 距離情報は JS から getElementById('scope-dist') で更新 -->
 </div>
 
 <!-- Flash / Danger -->
@@ -824,20 +946,39 @@ class Zombie {
 
     const root = gltf.scene;
 
-    // ── Reliable scale calculation using Box3 ──
-    // updateMatrixWorld(true) を先に呼ばないと子ノード(Armatureなど)の
-    // トランスフォームが反映されず、cm単位の生の頂点座標を読んでしまう
+    // ── スケール計算：SkinnedMeshはボーン座標で高さを測る ──
+    // 頂点はボーン原点付近に集まっており頂点座標では測れない
     root.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(root);
-    const naturalH = box.max.y - box.min.y;
+    let boneMinY = Infinity, boneMaxY = -Infinity;
+    let boneCount = 0;
+    const _bp = new THREE.Vector3();
+    root.traverse(obj => {
+      if (!obj.isBone) return;
+      obj.getWorldPosition(_bp);
+      if (_bp.y < boneMinY) boneMinY = _bp.y;
+      if (_bp.y > boneMaxY) boneMaxY = _bp.y;
+      boneCount++;
+    });
+    console.log('[Zombie GLB] boneCount=', boneCount, 'boneMinY=', boneMinY, 'boneMaxY=', boneMaxY);
+
+    let naturalH, minY;
+    if (boneCount > 1) {
+      naturalH = boneMaxY - boneMinY;
+      minY = boneMinY;
+    } else {
+      // ボーンがない場合はBox3フォールバック
+      const box = new THREE.Box3().setFromObject(root);
+      naturalH = box.max.y - box.min.y;
+      minY = box.min.y;
+    }
+    console.log('[Zombie GLB] naturalH =', naturalH);
+
     const desiredH = 1.8; // metres
     const scaleFactor = naturalH > 0.0001 ? desiredH / naturalH : 1;
+    console.log('[Zombie GLB] scaleFactor =', scaleFactor);
     root.scale.setScalar(scaleFactor);
-
-    // スケール適用後に再計算して足元をy=0に合わせる
-    root.updateMatrixWorld(true);
-    const box2 = new THREE.Box3().setFromObject(root);
-    root.position.y = -box2.min.y;
+    root.position.y = -minY * scaleFactor;
+    console.log('[Zombie GLB] final position.y =', root.position.y);
 
     this.group.add(root);
     this._modelRoot = root;
@@ -1354,21 +1495,29 @@ function updateScopeDist() {
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
   const meshes = [];
   zombies.forEach(z => { if (!z.isDead) meshes.push(z.head, z.torso); });
-  const hits = raycaster.intersectObjects(meshes);
+  // GLBメッシュも含める
+  zombies.forEach(z => { if (!z.isDead) z._meshes.forEach(m => meshes.push(m)); });
+  const hits = raycaster.intersectObjects(meshes, true);
   const dist = hits.length > 0 ? Math.round(hits[0].distance) : null;
   const distEl = document.getElementById('scope-dist');
+  const lbl    = document.getElementById('scope-drop-label');
   if (dist !== null) {
-    const drop = getDropLabel(dist);
-    distEl.textContent = dist + 'm' + (drop ? '  ' + drop : '  ✓');
-    distEl.style.color = dist > 100 ? 'rgba(255,120,60,0.85)' :
-                         dist > 60  ? 'rgba(255,220,60,0.85)' :
-                                      'rgba(0,220,80,0.75)';
-    const lbl = document.getElementById('scope-drop-label');
-    if (lbl) lbl.textContent = dist > 30 ? `弾落ち補正 ${dist > 100 ? '大' : dist > 60 ? '中' : '小'}` : '';
+    // 距離を3桁ゼロ埋めで表示
+    const dStr = String(dist).padStart(3, '0') + 'm';
+    distEl.textContent = dStr;
+    // SVG text は fill で色変更
+    const col = dist > 100 ? 'rgba(255,120,60,0.9)'
+              : dist > 60  ? 'rgba(255,220,60,0.9)'
+              :               'rgba(0,230,90,0.95)';
+    distEl.setAttribute('fill', col);
+    if (lbl) {
+      lbl.textContent = dist > 100 ? '▼ HOLD  150m+' :
+                        dist > 60  ? '▼ HOLD  100m'  :
+                        dist > 30  ? '▼ HOLD   60m'  : '';
+    }
   } else {
     distEl.textContent = '---m';
-    distEl.style.color = 'rgba(0,220,80,0.5)';
-    const lbl = document.getElementById('scope-drop-label');
+    distEl.setAttribute('fill', 'rgba(0,220,80,0.5)');
     if (lbl) lbl.textContent = '';
   }
 }
