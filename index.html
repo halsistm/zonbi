@@ -825,15 +825,19 @@ class Zombie {
     const root = gltf.scene;
 
     // ── Reliable scale calculation using Box3 ──
-    // Compute actual bounding box in local space (includes all child transforms)
+    // updateMatrixWorld(true) を先に呼ばないと子ノード(Armatureなど)の
+    // トランスフォームが反映されず、cm単位の生の頂点座標を読んでしまう
+    root.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(root);
     const naturalH = box.max.y - box.min.y;
     const desiredH = 1.8; // metres
     const scaleFactor = naturalH > 0.0001 ? desiredH / naturalH : 1;
     root.scale.setScalar(scaleFactor);
 
-    // Ground the model (feet at y=0)
-    root.position.y = -box.min.y * scaleFactor;
+    // スケール適用後に再計算して足元をy=0に合わせる
+    root.updateMatrixWorld(true);
+    const box2 = new THREE.Box3().setFromObject(root);
+    root.position.y = -box2.min.y;
 
     this.group.add(root);
     this._modelRoot = root;
