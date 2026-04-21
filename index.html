@@ -1051,7 +1051,15 @@ class Zombie {
       this.group.rotation.y = Math.atan2(dx, dz);
     }
 
-    if (this.mixer) this.mixer.update(dt);
+    if (this.mixer) {
+      this.mixer.update(dt);
+      // アニメーションのルートモーション（X/Z移動）を無効化
+      // これがないとアニメが位置を巻き戻して「進んで戻って」になる
+      if (this._modelRoot) {
+        this._modelRoot.position.x = 0;
+        this._modelRoot.position.z = 0;
+      }
+    }
 
     if (this.group.position.z >= MISS_Z && !this.isMissed) {
       this.isMissed = true;
