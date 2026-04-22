@@ -1841,6 +1841,7 @@ function startGame() {
   isScoped = false; canShoot = true; shootCooldown = 0;
   yaw = 0; pitch = -0.12;
   recoilPitch = 0; recoilYaw = 0;
+  breathBlend = 0.0;
   lookTouchId = null;
 
   zombies.forEach(z => z.destroy()); zombies = [];
@@ -1900,6 +1901,7 @@ document.getElementById('touch-pause-btn').addEventListener('touchstart', e => {
 // MAIN LOOP
 // ════════════════════════════════════════════
 let lastT = 0;
+let breathBlend = 0.0; // 0=スコープ中(揺らぎなし) ↔ 1=通常時(呼吸揺らぎMAX)
 
 function animate(t) {
   requestAnimationFrame(animate);
@@ -1947,9 +1949,26 @@ function animate(t) {
     });
     for (let i = toRemove.length - 1; i >= 0; i--) zombies.splice(toRemove[i], 1);
 
-    // Camera（リコイルオフセット加算）
-    camera.rotation.y = yaw   + recoilYaw;
-    camera.rotation.x = pitch + recoilPitch;
+    // ── 呼吸揺らぎ（スコープ時は素早く収束、解除時はゆっくり戻る）──
+    const breathTarget = isScoped ? 0.0 : 1.0;
+    breathBlend += (breathTarget - breathBlend) * Math.min(1, dt * (isScoped ? 9 : 3));
+
+    // 複数周波数を重ねて有機的な呼吸リズムを再現
+    // 主呼吸 ~0.28Hz(約17回/分) ＋ 倍音 ＋ 心拍数マイクロ震え
+    const breathPitch = (
+      Math.sin(ts * 1.75)        * 0.0044  +  // 主呼吸サイクル（吸う/吐く）
+      Math.sin(ts * 3.50 + 0.4)  * 0.0013  +  // 呼吸の倍音（胸の揺れ）
+      Math.sin(ts * 7.85 + 1.1)  * 0.00040    // 心拍・手の微振動
+    ) * breathBlend;
+
+    const breathYaw = (
+      Math.sin(ts * 0.88 + 1.2)  * 0.0016  +  // ゆっくりした左右ふらつき
+      Math.sin(ts * 7.85 + 2.5)  * 0.00022    // 横方向の微振動
+    ) * breathBlend;
+
+    // Camera（リコイル ＋ 呼吸揺らぎ）
+    camera.rotation.y = yaw   + recoilYaw   + breathYaw;
+    camera.rotation.x = pitch + recoilPitch + breathPitch;
 
     // Scope dist（スコープ中は毎フレーム更新）
     if (isScoped) updateScopeDist();
