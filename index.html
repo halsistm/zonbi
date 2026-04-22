@@ -39,16 +39,16 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   text-align: right; color: #fff;
   filter: drop-shadow(0 0 6px rgba(0,0,0,0.9));
 }
-#score-val { font-size: 34px; font-weight: bold; color: #ffd700; letter-spacing: 2px; }
-#timer-val { font-size: 13px; color: #88ff88; margin-top: 2px; letter-spacing: 1px; }
-#scope-indicator { font-size: 11px; color: #88ccff; margin-top: 3px; letter-spacing: 2px; opacity: 0; transition: opacity 0.2s; }
+#score-val { font-size: 44px; font-weight: bold; color: #ffd700; letter-spacing: 2px; }
+#timer-val { font-size: 17px; color: #88ff88; margin-top: 2px; letter-spacing: 1px; }
+#scope-indicator { font-size: 14px; color: #88ccff; margin-top: 3px; letter-spacing: 2px; opacity: 0; transition: opacity 0.2s; }
 
 /* Miss gauge */
 #miss-panel { position: absolute; bottom: 24px; left: 18px; }
-#miss-label { font-size: 11px; color: #aaa; letter-spacing: 2px; margin-bottom: 6px; }
+#miss-label { font-size: 14px; color: #aaa; letter-spacing: 2px; margin-bottom: 6px; }
 #miss-icons { display: flex; gap: 6px; }
 .miss-icon {
-  width: 18px; height: 18px; border-radius: 50%;
+  width: 22px; height: 22px; border-radius: 50%;
   background: #222; border: 1px solid #555;
   transition: all 0.2s;
 }
@@ -70,7 +70,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 #hit-text {
   position: absolute; top: 42%; left: 50%;
   transform: translateX(-50%);
-  font-size: 20px; font-weight: bold;
+  font-size: 28px; font-weight: bold;
   opacity: 0; pointer-events: none;
   transition: opacity 0.15s;
   text-shadow: 0 0 12px currentColor;
@@ -79,7 +79,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 #combo-text {
   position: absolute; top: 37%; left: 50%;
   transform: translateX(-50%);
-  font-size: 18px; font-weight: bold; color: #ff8800;
+  font-size: 24px; font-weight: bold; color: #ff8800;
   opacity: 0; pointer-events: none;
   text-shadow: 0 0 12px #ff8800;
   letter-spacing: 3px;
@@ -87,7 +87,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 #kill-feed {
   position: absolute; top: 15px; left: 50%;
   transform: translateX(-50%);
-  font-size: 12px; color: #ffcc00;
+  font-size: 16px; color: #ffcc00;
   opacity: 0; pointer-events: none;
   letter-spacing: 2px;
 }
@@ -1308,6 +1308,255 @@ function toggleScope() {
 // ════════════════════════════════════════════
 const raycaster = new THREE.Raycaster();
 
+// ── 弾丸トレーサー & 着弾マーカー ──
+const bulletTracers  = [];
+const impactMarkers  = [];
+
+// ── 弾落ち：ワールド座標（メートル）で定義 ──
+function getBulletDropWorld(dist) {
+  if (dist <= 30)  return 0;
+  if (dist <= 60)  return 0.35;
+  if (dist <= 100) return 1.2;
+  return 3.0;
+}
+
+// ── 着弾テクスチャ：血液飛沫 (hit/kill) ──
+function _buildBloodTex(big) {
+  const S = 128;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const cx = S/2, cy = S/2;
+
+  // Outer halo
+  const g = ctx.createRadialGradient(cx, cy, big?20:12, cx, cy, big?56:40);
+  g.addColorStop(0, 'rgba(100,0,0,0.45)');
+  g.addColorStop(1, 'rgba(50,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(cx, cy, big?56:40, 0, Math.PI*2); ctx.fill();
+
+  // Main pool – irregular polygon
+  const r0 = big ? 23 : 17;
+  const jitters = [0.82,1.12,0.88,1.18,0.78,1.08,0.92,1.14,0.82,1.02,0.90];
+  ctx.fillStyle = big ? '#580000' : '#480000';
+  ctx.beginPath();
+  for (let i = 0; i < 11; i++) {
+    const a = (i/11)*Math.PI*2;
+    const r = r0 * jitters[i];
+    if (i === 0) ctx.moveTo(cx + Math.cos(a)*r, cy + Math.sin(a)*r);
+    else         ctx.lineTo(cx + Math.cos(a)*r, cy + Math.sin(a)*r);
+  }
+  ctx.closePath(); ctx.fill();
+
+  // Spatter streaks with slight curve
+  const sa = [0.28,1.05,1.88,2.65,3.44,4.22,5.01,5.75, 0.7, 2.3];
+  const nl = big ? 9 : 6;
+  for (let i = 0; i < nl; i++) {
+    const a   = sa[i % sa.length];
+    const len = (big ? 26 : 17) + (i%3)*8;
+    const w   = 1.0 + (i%3)*0.6;
+    ctx.strokeStyle = `rgba(${55+(i%3)*18},0,0,0.78)`;
+    ctx.lineWidth = w;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a)*(r0-4), cy + Math.sin(a)*(r0-4));
+    ctx.quadraticCurveTo(
+      cx + Math.cos(a+0.14)*(r0+len*0.5),
+      cy + Math.sin(a+0.14)*(r0+len*0.5),
+      cx + Math.cos(a+0.06)*len, cy + Math.sin(a+0.06)*len
+    );
+    ctx.stroke();
+    // Tip droplet
+    ctx.fillStyle = `rgba(${70+(i%3)*15},0,0,0.68)`;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a)*len, cy + Math.sin(a)*len, w+0.9, 0, Math.PI*2);
+    ctx.fill();
+    // Mid droplet
+    if (i%2===0) {
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a)*len*0.52, cy + Math.sin(a)*len*0.52, w*0.65, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // Entry hole (darkest centre)
+  const hr = big ? 7 : 5;
+  const hg = ctx.createRadialGradient(cx, cy, 0, cx, cy, hr);
+  hg.addColorStop(0,   'rgba(3,0,0,0.98)');
+  hg.addColorStop(0.55,'rgba(18,0,0,0.88)');
+  hg.addColorStop(1,   'rgba(45,0,0,0)');
+  ctx.fillStyle = hg;
+  ctx.beginPath(); ctx.arc(cx, cy, hr, 0, Math.PI*2); ctx.fill();
+
+  return new THREE.CanvasTexture(c);
+}
+
+// ── 着弾テクスチャ：コンクリート弾痕 (miss) ──
+function _buildConcreteTex() {
+  const S = 128;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const cx = S/2, cy = S/2;
+
+  // Dust cloud
+  const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, 48);
+  g.addColorStop(0,    'rgba(172,162,140,0)');
+  g.addColorStop(0.18, 'rgba(158,148,126,0.28)');
+  g.addColorStop(0.55, 'rgba(132,124,106,0.13)');
+  g.addColorStop(1,    'rgba(110,104,90,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(cx, cy, 52, 0, Math.PI*2); ctx.fill();
+
+  // Radial cracks – 7 arms with jag
+  const ca = [0, 0.44, 0.90, 1.57, 2.32, 3.14, 3.82, 5.05, 5.58];
+  for (let i = 0; i < 7; i++) {
+    const a = ca[i];
+    const len = 17 + (i%3)*10;
+    ctx.save();
+    ctx.strokeStyle = `rgba(52,48,40,${0.52+(i%3)*0.14})`;
+    ctx.lineWidth = 0.85;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    for (let s = 0; s < 3; s++) {
+      const t = (s+1)/3;
+      const da = (s%2===0 ? 0.18 : -0.16);
+      ctx.lineTo(cx + Math.cos(a+da)*len*t, cy + Math.sin(a+da)*len*t);
+    }
+    ctx.stroke();
+    // Branch
+    if (i%2 === 0) {
+      const bBase = new THREE.Vector2(cx + Math.cos(a)*len*0.48, cy + Math.sin(a)*len*0.48);
+      ctx.lineWidth = 0.55;
+      ctx.beginPath();
+      ctx.moveTo(bBase.x, bBase.y);
+      ctx.lineTo(bBase.x + Math.cos(a+0.60)*len*0.38, bBase.y + Math.sin(a+0.60)*len*0.38);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Debris chips
+  const dp = [[13,-20],[-21,9],[19,16],[-9,-23],[23,-11],[-16,19],[9,25],[-23,-15],[17,-25]];
+  dp.forEach(([dx,dy]) => {
+    const sz = 1.4 + Math.abs(dx)%3*0.6;
+    ctx.fillStyle = `rgba(${118+Math.abs(dx)%32},${108+Math.abs(dy)%26},${88+Math.abs(dx+dy)%22},0.52)`;
+    ctx.beginPath(); ctx.arc(cx+dx, cy+dy, sz, 0, Math.PI*2); ctx.fill();
+  });
+
+  // Centre hole
+  const hg = ctx.createRadialGradient(cx, cy, 0, cx, cy, 10);
+  hg.addColorStop(0,   'rgba(6,5,4,0.97)');
+  hg.addColorStop(0.42,'rgba(28,25,20,0.88)');
+  hg.addColorStop(0.8, 'rgba(64,58,48,0.42)');
+  hg.addColorStop(1,   'rgba(88,82,68,0)');
+  ctx.fillStyle = hg;
+  ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI*2); ctx.fill();
+
+  // Bright exposed rim
+  ctx.strokeStyle = 'rgba(178,168,144,0.42)';
+  ctx.lineWidth = 1.1;
+  ctx.beginPath(); ctx.arc(cx, cy, 8.5, 0, Math.PI*2); ctx.stroke();
+
+  return new THREE.CanvasTexture(c);
+}
+
+const _texBloodHit  = _buildBloodTex(false);
+const _texBloodKill = _buildBloodTex(true);
+const _texConcrete  = _buildConcreteTex();
+
+function spawnImpactMarker(worldPos, type) {
+  const tex  = (type === 'kill') ? _texBloodKill :
+               (type === 'hit')  ? _texBloodHit  : _texConcrete;
+  const mat  = new THREE.SpriteMaterial({
+    map: tex, transparent: true, opacity: 1.0,
+    depthTest: false, depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.position.copy(worldPos);
+  const sz = type === 'kill' ? 1.35 : type === 'hit' ? 0.85 : 0.62;
+  sprite.scale.set(sz, sz, 1);
+  scene.add(sprite);
+  impactMarkers.push({ sprite, baseSize: sz, life: 0, maxLife: 3.2 });
+}
+
+// ── 弾丸トレーサー：放物線弧 ──
+function spawnBulletTracer(tracerOrigin, estimatedDist, scopeMode) {
+  const worldDrop = getBulletDropWorld(estimatedDist) * (scopeMode ? 1.0 : 1.8);
+
+  // Aim direction (straight – no drop)
+  const camFwd = new THREE.Vector3();
+  camera.getWorldDirection(camFwd);
+  const aimEnd = tracerOrigin.clone().addScaledVector(camFwd, estimatedDist);
+
+  // Build parabolic arc
+  const N = 18;
+  const arcPts = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const p = tracerOrigin.clone().lerp(aimEnd, t);
+    p.y -= worldDrop * t * t;   // quadratic gravity drop
+    arcPts.push(p);
+  }
+  const curve = new THREE.CatmullRomCurve3(arcPts, false, 'centripetal', 0.5);
+
+  // Geometry with 12-slot buffer
+  const SEGS = 12;
+  const posArr = new Float32Array((SEGS+1) * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  geo.setDrawRange(0, 2);
+
+  const mat = new THREE.LineBasicMaterial({ color: 0xfff2cc, transparent: true, opacity: 0.88 });
+  const line = new THREE.Line(geo, mat);
+  scene.add(line);
+
+  const maxLife = Math.max(0.13, estimatedDist / 280);
+  bulletTracers.push({ line, geo, curve, life: 0, maxLife, SEGS });
+}
+
+function updateTracersAndMarkers(dt) {
+  // ── Bullet tracers ──
+  for (let i = bulletTracers.length - 1; i >= 0; i--) {
+    const tr = bulletTracers[i];
+    tr.life += dt;
+    const p = Math.min(1, tr.life / tr.maxLife);
+
+    const headT = Math.min(1, p * 1.75);
+    const tailT = Math.max(0, headT - 0.20);
+
+    const pos = tr.geo.attributes.position;
+    for (let s = 0; s <= tr.SEGS; s++) {
+      const t = tailT + (headT - tailT) * (s / tr.SEGS);
+      const pt = tr.curve.getPoint(Math.min(1, t));
+      pos.setXYZ(s, pt.x, pt.y, pt.z);
+    }
+    pos.needsUpdate = true;
+    tr.geo.setDrawRange(0, tr.SEGS + 1);
+    tr.line.material.opacity = Math.max(0, (1 - p*p) * 0.90);
+
+    if (p >= 1) {
+      scene.remove(tr.line);
+      tr.geo.dispose();
+      tr.line.material.dispose();
+      bulletTracers.splice(i, 1);
+    }
+  }
+
+  // ── Impact markers ──
+  for (let i = impactMarkers.length - 1; i >= 0; i--) {
+    const m = impactMarkers[i];
+    m.life += dt;
+    const p = m.life / m.maxLife;
+    // Pop scale on entry, then steady, then fade
+    const scl = m.life < 0.10 ? 1 + (1 - m.life/0.10)*0.6 : 1.0;
+    m.sprite.scale.set(m.baseSize * scl, m.baseSize * scl, 1);
+    m.sprite.material.opacity = Math.max(0, 1 - Math.pow(p, 1.8));
+    if (m.life >= m.maxLife) {
+      scene.remove(m.sprite);
+      m.sprite.material.dispose();
+      impactMarkers.splice(i, 1);
+    }
+  }
+}
+
 // ── 距離偏差（仕様書準拠）──
 // 距離に応じた弾落ち量をNDC Y座標オフセットで返す
 function getBulletDrop(dist) {
@@ -1357,8 +1606,14 @@ function shoot() {
   const hits = raycaster.intersectObjects(allMeshes);
 
   // ── 着弾判定 ──
+  // トレーサー起点（カメラから少し前）
+  const tracerOrigin = camera.position.clone().addScaledVector(raycaster.ray.direction, 0.5);
+  let impactPoint = null;
+  let hitType = 'miss';
+
   if (hits.length > 0) {
     const { zombie, part } = hits[0].object.userData;
+    impactPoint = hits[0].point.clone();
     if (zombie && !zombie.isDead) {
       const killed = zombie.takeDamage(part);
       if (killed) {
@@ -1370,14 +1625,29 @@ function shoot() {
         const pts  = Math.round(base * mult);
         score += pts;
         updateScoreHUD();
+        hitType = 'kill';
         if (part === 'head') showHit(`HEAD SHOT  +${pts}`, '#ff2200');
         else                  showHit(`KILL  +${pts}`,      '#ffaa00');
         if (combo >= 3)       showCombo(combo, mult);
       } else {
+        hitType = 'hit';
         showHit('HIT', '#ffffff');
       }
     }
   }
+
+  // 着弾先が無い場合は遠方の地面想定
+  if (!impactPoint) {
+    impactPoint = camera.position.clone()
+      .addScaledVector(raycaster.ray.direction, 150);
+    // 地面より下に行ったら地面にクランプ
+    if (impactPoint.y < 0.05) impactPoint.y = 0.05;
+  }
+
+  // 弾丸トレーサー生成（放物線）
+  spawnBulletTracer(tracerOrigin, estimatedDist, isScoped);
+  // 着弾マーカー生成
+  spawnImpactMarker(impactPoint, hitType);
 
   // ── リコイル適用 ──
   // pitch/yaw 本体に直接加算（永続・元には戻らない）
@@ -1672,6 +1942,7 @@ function animate(t) {
     // Scope dist（スコープ中は毎フレーム更新）
     if (isScoped) updateScopeDist();
 
+    updateTracersAndMarkers(dt);
     drawMinimap();
 
   } else {
