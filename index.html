@@ -1015,6 +1015,20 @@ class Zombie {
 
     // Animations
     if (gltf.animations && gltf.animations.length > 0) {
+      // ── ルートモーション除去（根本解決） ──
+      // root直下のノード名（Armatureなど）を収集し、
+      // そのノードの.positionトラックをクリップから削除する
+      const rootNodeNames = new Set();
+      rootNodeNames.add(root.name);
+      root.children.forEach(c => rootNodeNames.add(c.name));
+      gltf.animations.forEach(clip => {
+        clip.tracks = clip.tracks.filter(track => {
+          if (!track.name.endsWith('.position')) return true;
+          const nodeName = track.name.slice(0, track.name.lastIndexOf('.'));
+          return !rootNodeNames.has(nodeName);
+        });
+      });
+
       this.mixer = new THREE.AnimationMixer(root);
       const clip =
         gltf.animations.find(c => /walk/i.test(c.name)) ||
@@ -1054,10 +1068,14 @@ class Zombie {
     if (this.mixer) {
       this.mixer.update(dt);
       // アニメーションのルートモーション（X/Z移動）を無効化
-      // これがないとアニメが位置を巻き戻して「進んで戻って」になる
+      // ①シーンルート、②Armature等の直接子ノード 両方リセット
       if (this._modelRoot) {
         this._modelRoot.position.x = 0;
         this._modelRoot.position.z = 0;
+        this._modelRoot.children.forEach(child => {
+          child.position.x = 0;
+          child.position.z = 0;
+        });
       }
     }
 
