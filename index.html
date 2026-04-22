@@ -1015,17 +1015,23 @@ class Zombie {
 
     // Animations
     if (gltf.animations && gltf.animations.length > 0) {
-      // ── ルートモーション除去（根本解決） ──
-      // root直下のノード名（Armatureなど）を収集し、
-      // そのノードの.positionトラックをクリップから削除する
-      const rootNodeNames = new Set();
-      rootNodeNames.add(root.name);
-      root.children.forEach(c => rootNodeNames.add(c.name));
+
+      // ══ ルートモーション除去 Step-1: クリップから XZ 移動する position トラックを削除 ══
+      // 「値が常に同じ」= 実際に動いていない → 残す（Y のみのボブなど）
+      // 「XZ が少しでも変化する」= ルートモーション → 削除
       gltf.animations.forEach(clip => {
         clip.tracks = clip.tracks.filter(track => {
-          if (!track.name.endsWith('.position')) return true;
-          const nodeName = track.name.slice(0, track.name.lastIndexOf('.'));
-          return !rootNodeNames.has(nodeName);
+          if (!track.name.endsWith('.position')) return true; // 回転・スケールはそのまま
+          const v = track.values;
+          if (v.length < 6) return true; // キーが1フレームだけなら動かない
+          const x0 = v[0], z0 = v[2];
+          for (let k = 3; k < v.length; k += 3) {
+            if (Math.abs(v[k] - x0) > 0.001 || Math.abs(v[k+2] - z0) > 0.001) {
+              // このトラックはキャラを XZ 方向に動かしている = ルートモーション
+              return false; // 削除
+            }
+          }
+          return true; // XZ 変化なし（Y のみ等）は保持
         });
       });
 
@@ -1039,6 +1045,13 @@ class Zombie {
       this.walkAction.timeScale = this.speed * 0.9;
       this.walkAction.play();
     }
+
+    // ══ ルートモーション除去 Step-2: 全ノードの bind-pose 位置を記録 ══
+    // mixer.update() 後にこれで上書きすることで残留トラックも無力化
+    this._bindPositions = new Map();
+    root.traverse(obj => {
+      this._bindPositions.set(obj.uuid, obj.position.clone());
+    });
 
     this._loaded = true;
   }
@@ -1067,14 +1080,13 @@ class Zombie {
 
     if (this.mixer) {
       this.mixer.update(dt);
-      // アニメーションのルートモーション（X/Z移動）を無効化
-      // ①シーンルート、②Armature等の直接子ノード 両方リセット
-      if (this._modelRoot) {
-        this._modelRoot.position.x = 0;
-        this._modelRoot.position.z = 0;
-        this._modelRoot.children.forEach(child => {
-          child.position.x = 0;
-          child.position.z = 0;
+      // ══ ルートモーション除去 Step-2: bind-pose 位置を全ノードに復元 ══
+      // 回転トラック（足・腕の動き）は触らず position のみ上書き
+      // → 視覚的な歩きはそのまま、キャラ全体の移動だけ消える
+      if (this._modelRoot && this._bindPositions) {
+        this._modelRoot.traverse(obj => {
+          const bp = this._bindPositions.get(obj.uuid);
+          if (bp) obj.position.copy(bp);
         });
       }
     }
